@@ -686,4 +686,826 @@
         let currentSlide = 0;
         let slideInterval;
         const slideDuration = 5000; // 5 segundos por slide
-        let darkMode = 
+        let darkMode = true;
+
+        // Inicializar a aplicação
+        function init() {
+            loadSavedData();
+            loadCloudConfig();
+            createSlides();
+            createAdminControls();
+            startSlideShow();
+            applyTheme();
+        }
+
+        // Aplicar tema
+        function applyTheme() {
+            document.documentElement.style.setProperty('--bg-color', darkMode ? '#222' : '#f5f5f5');
+            document.documentElement.style.setProperty('--text-color', darkMode ? '#fff' : '#333');
+            document.documentElement.style.setProperty('--panel-bg', darkMode ? '#424242' : '#ffffff');
+            document.documentElement.style.setProperty('--panel-text', darkMode ? '#e0e0e0' : '#333');
+            document.documentElement.style.setProperty('--control-bg', darkMode ? '#616161' : '#f9f9f9');
+            document.documentElement.style.setProperty('--input-bg', darkMode ? '#757575' : '#ffffff');
+            document.documentElement.style.setProperty('--input-text', darkMode ? '#fff' : '#000');
+            document.documentElement.style.setProperty('--border-color', darkMode ? '#555' : '#ddd');
+            themeToggle.textContent = darkMode ? '🌓' : '🌒';
+        }
+
+        // Alternar tema
+        function toggleTheme() {
+            darkMode = !darkMode;
+            applyTheme();
+            localStorage.setItem('darkMode', darkMode ? 'enabled' : 'disabled');
+        }
+
+        // Carregar dados salvos
+        function loadSavedData() {
+            const savedData = localStorage.getItem('attendanceData');
+            if (savedData) {
+                try {
+                    const parsedData = JSON.parse(savedData);
+                    if (parsedData && typeof parsedData === 'object') {
+                        for (const grade in parsedData) {
+                            if (classesData[grade]) {
+                                for (const className in parsedData[grade]) {
+                                    if (classesData[grade][className]) {
+                                        classesData[grade][className] = parsedData[grade][className];
+                                    }
+                                }
+                            }
+                        }
+                    }
+                } catch (e) {
+                    console.error('Erro ao carregar dados salvos:', e);
+                }
+            }
+
+            // Carregar preferência de tema
+            const savedTheme = localStorage.getItem('darkMode');
+            if (savedTheme === 'disabled') {
+                darkMode = false;
+            }
+        }
+
+        // Carregar configuração da nuvem
+        function loadCloudConfig() {
+            const savedConfig = localStorage.getItem('jsonBinConfig');
+            if (savedConfig) {
+                try {
+                    jsonBinConfig = JSON.parse(savedConfig);
+                } catch (e) {
+                    console.error('Erro ao carregar configuração da nuvem:', e);
+                }
+            }
+        }
+
+        // Salvar configuração da nuvem
+        function saveCloudConfig() {
+            localStorage.setItem('jsonBinConfig', JSON.stringify(jsonBinConfig));
+        }
+
+        // Mostrar mensagem de status
+        function showStatus(message, isSuccess = true) {
+            statusMessage.textContent = message;
+            statusMessage.className = isSuccess ? 'status-message status-success' : 'status-message status-error';
+            statusMessage.style.display = 'block';
+            
+            setTimeout(() => {
+                statusMessage.style.display = 'none';
+            }, 3000);
+        }
+
+        // Gerenciador do JSONbin
+        class JSONBinManager {
+            constructor(config) {
+                this.config = config;
+            }
+
+            // Criar um novo bin
+            async createBin(data, binName = 'Frequência Escolar') {
+                try {
+                    const response = await fetch(this.config.baseURL, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'X-Master-Key': this.config.apiKey,
+                            'X-Bin-Name': binName
+                        },
+                        body: JSON.stringify(data)
+                    });
+
+                    if (!response.ok) throw new Error('Erro ao criar bin');
+
+                    const result = await response.json();
+                    this.config.binId = result.metadata.id;
+                    saveCloudConfig();
+                    return result;
+                } catch (error) {
+                    console.error('Erro:', error);
+                    throw error;
+                }
+            }
+
+            // Ler dados do bin
+            async readBin() {
+                if (!this.config.binId) throw new Error('Bin ID não definido');
+
+                try {
+                    const response = await fetch(`${this.config.baseURL}/${this.config.binId}`, {
+                        method: 'GET',
+                        headers: {
+                            'X-Master-Key': this.config.apiKey
+                        }
+                    });
+
+                    if (!response.ok) throw new Error('Erro ao ler bin');
+
+                    const result = await response.json();
+                    return result.record;
+                } catch (error) {
+                    console.error('Erro:', error);
+                    throw error;
+                }
+            }
+
+            // Atualizar dados do bin
+            async updateBin(data) {
+                if (!this.config.binId) throw new Error('Bin ID não definido');
+
+                try {
+                    const response = await fetch(`${this.config.baseURL}/${this.config.binId}`, {
+                        method: 'PUT',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'X-Master-Key': this.config.apiKey
+                        },
+                        body: JSON.stringify(data)
+                    });
+
+                    if (!response.ok) throw new Error('Erro ao atualizar bin');
+
+                    return await response.json();
+                } catch (error) {
+                    console.error('Erro:', error);
+                    throw error;
+                }
+            }
+        }
+
+        // Salvar dados na nuvem
+        async function saveToCloud() {
+            if (!jsonBinConfig.apiKey) {
+                showStatus('Configure primeiro a chave API', false);
+                showConfigPanel();
+                return;
+            }
+
+            saveCloudBtn.textContent = 'Salvando...';
+            saveCloudBtn.disabled = true;
+
+            try {
+                const jsonBinManager = new JSONBinManager(jsonBinConfig);
+                
+                // Atualizar dados dos inputs antes de salvar
+                updateDataFromInputs();
+                
+                if (jsonBinConfig.binId) {
+                    await jsonBinManager.updateBin(classesData);
+                    showStatus('Dados atualizados na nuvem com sucesso!');
+                } else {
+                    const result = await jsonBinManager.createBin(classesData);
+                    jsonBinConfig.binId = result.metadata.id;
+                    saveCloudConfig();
+                    showStatus('Dados salvos na nuvem com sucesso! Novo bin criado: ' + result.metadata.id);
+                }
+            } catch (error) {
+                console.error('Erro ao salvar na nuvem:', error);
+                showStatus('Erro ao salvar na nuvem: ' + error.message, false);
+            } finally {
+                saveCloudBtn.textContent = 'Salvar na Nuvem';
+                saveCloudBtn.disabled = false;
+            }
+        }
+
+        // Carregar dados da nuvem
+        async function loadFromCloud() {
+            if (!jsonBinConfig.apiKey || !jsonBinConfig.binId) {
+                showStatus('Configure primeiro a chave API e o ID do bin', false);
+                showConfigPanel();
+                return;
+            }
+
+            loadCloudBtn.textContent = 'Carregando...';
+            loadCloudBtn.disabled = true;
+
+            try {
+                const jsonBinManager = new JSONBinManager(jsonBinConfig);
+                const cloudData = await jsonBinManager.readBin();
+                
+                // Atualizar os dados locais
+                classesData = cloudData;
+                
+                // Atualizar a interface
+                createAdminControls();
+                updateSlides();
+                
+                // Salvar localmente também
+                localStorage.setItem('attendanceData', JSON.stringify(classesData));
+                
+                showStatus('Dados carregados da nuvem com sucesso!');
+            } catch (error) {
+                console.error('Erro ao carregar da nuvem:', error);
+                showStatus('Erro ao carregar da nuvem: ' + error.message, false);
+            } finally {
+                loadCloudBtn.textContent = 'Carregar da Nuvem';
+                loadCloudBtn.disabled = false;
+            }
+        }
+
+        // Mostrar painel de configuração
+        function showConfigPanel() {
+            apiKeyInput.value = jsonBinConfig.apiKey || '';
+            binIdInput.value = jsonBinConfig.binId || '';
+            configPanel.style.display = 'block';
+            configOverlay.style.display = 'block';
+        }
+
+        // Fechar painel de configuração
+        function hideConfigPanel() {
+            configPanel.style.display = 'none';
+            configOverlay.style.display = 'none';
+        }
+
+        // Salvar configuração
+        function saveConfig() {
+            jsonBinConfig.apiKey = apiKeyInput.value.trim();
+            jsonBinConfig.binId = binIdInput.value.trim();
+            saveCloudConfig();
+            hideConfigPanel();
+            showStatus('Configuração salva com sucesso!');
+        }
+
+        // Determinar a classe de cor com base na frequência
+        function getAttendanceClass(attendance) {
+            if (attendance < 85) return 'low';
+            if (attendance < 90) return 'medium';
+            return 'high';
+        }
+
+        // Criar slides para cada série - FUNÇÃO MODIFICADA
+        function createSlides() {
+            displayScreen.innerHTML = '';
+            
+            for (const grade in classesData) {
+                const slide = document.createElement('div');
+                slide.className = 'slide';
+                
+                // Ordenar turmas por frequência (maior para menor)
+                const sortedClasses = Object.entries(classesData[grade])
+                    .sort((a, b) => b[1].currentWeek - a[1].currentWeek);
+                
+                // Criar título da série
+                const title = document.createElement('h1');
+                title.className = 'grade-title';
+                title.textContent = grade;
+                slide.appendChild(title);
+                
+                // Criar container do pódio e legenda
+                const podiumContainer = document.createElement('div');
+                podiumContainer.className = 'podium-container';
+                
+                // Criar pódio
+                const podium = document.createElement('div');
+                podium.className = 'podium';
+                
+                // Calcular alturas proporcionais
+                const maxFreq = sortedClasses[0][1].currentWeek;
+                const minFreq = sortedClasses[sortedClasses.length-1][1].currentWeek;
+                const maxHeight = 50; // Altura máxima em vh
+                const minHeight = 30; // Altura mínima em vh
+                
+                // Função para calcular altura proporcional
+                const calculateHeight = (freq) => {
+                    if (maxFreq === minFreq) return maxHeight;
+                    return minHeight + ((freq - minFreq) / (maxFreq - minFreq)) * (maxHeight - minHeight);
+                };
+                
+                // Criar os degraus do pódio na ordem correta: 2º (esquerda), 1º (centro), 3º (direita)
+                if (sortedClasses.length >= 2) {
+                    const height = calculateHeight(sortedClasses[1][1].currentWeek);
+                    podium.appendChild(createPodiumStep(sortedClasses[1], '2º', height));
+                }
+                
+                if (sortedClasses.length >= 1) {
+                    const height = calculateHeight(sortedClasses[0][1].currentWeek);
+                    podium.appendChild(createPodiumStep(sortedClasses[0], '1º', height));
+                }
+                
+                if (sortedClasses.length >= 3) {
+                    const height = calculateHeight(sortedClasses[2][1].currentWeek);
+                    podium.appendChild(createPodiumStep(sortedClasses[2], '3º', height));
+                }
+                
+                // Criar legenda
+                const legend = document.createElement('div');
+                legend.className = 'legend';
+                
+                const legendTitle = document.createElement('h3');
+                legendTitle.textContent = 'Legenda de Frequência';
+                legend.appendChild(legendTitle);
+                
+                // Item 1: Alta frequência (verde)
+                const highItem = document.createElement('div');
+                highItem.className = 'legend-item';
+                const highColor = document.createElement('div');
+                highColor.className = 'legend-color';
+                highColor.style.backgroundColor = '#4CAF50';
+                highItem.appendChild(highColor);
+                highItem.appendChild(document.createTextNode('90% ou mais'));
+                legend.appendChild(highItem);
+                
+                // Item 2: Média frequência (amarelo)
+                const mediumItem = document.createElement('div');
+                mediumItem.className = 'legend-item';
+                const mediumColor = document.createElement('div');
+                mediumColor.className = 'legend-color';
+                mediumColor.style.backgroundColor = '#FFD600';
+                mediumItem.appendChild(mediumColor);
+                mediumItem.appendChild(document.createTextNode('85% a 89,9%'));
+                legend.appendChild(mediumItem);
+                
+                // Item 3: Baixa frequência (vermelho)
+                const lowItem = document.createElement('div');
+                lowItem.className = 'legend-item';
+                const lowColor = document.createElement('div');
+                lowColor.className = 'legend-color';
+                lowColor.style.backgroundColor = '#FF5252';
+                lowItem.appendChild(lowColor);
+                lowItem.appendChild(document.createTextNode('Abaixo de 85%'));
+                legend.appendChild(lowItem);
+                
+                podiumContainer.appendChild(podium);
+                podiumContainer.appendChild(legend);
+                slide.appendChild(podiumContainer);
+                displayScreen.appendChild(slide);
+            }
+            
+            // Ativar o primeiro slide
+            const slides = document.querySelectorAll('.slide');
+            if (slides.length > 0) {
+                slides[0].classList.add('active');
+                currentSlide = 0;
+            }
+        }
+
+        // Criar um degrau do pódio com cores baseadas na frequência - FUNÇÃO MODIFICADA
+        function createPodiumStep(classData, position, height) {
+            const podiumStep = document.createElement('div');
+            podiumStep.className = 'podium-step';
+            
+            const positionNumber = document.createElement('div');
+            positionNumber.className = 'position-number';
+            positionNumber.textContent = position;
+            podiumStep.appendChild(positionNumber);
+            
+            const podiumStand = document.createElement('div');
+            
+            // Determinar a classe de cor com base na frequência
+            const attendance = classData[1].currentWeek;
+            let podiumClass, positionText;
+            
+            if (attendance >= 90) {
+                podiumClass = 'high-podium';
+                positionText = 'ALTA FREQUÊNCIA';
+            } else if (attendance >= 85) {
+                podiumClass = 'medium-podium';
+                positionText = 'MÉDIA FREQUÊNCIA';
+            } else {
+                podiumClass = 'low-podium';
+                positionText = 'BAIXA FREQUÊNCIA';
+            }
+            
+            // Definir altura proporcional
+            podiumStand.style.height = `${height}vh`;
+            podiumStand.className = `podium-stand ${podiumClass}`;
+            
+            const classInfo = document.createElement('div');
+            classInfo.className = 'class-info';
+            
+            const className = document.createElement('div');
+            className.className = 'class-name';
+            className.textContent = `${classData[0]} - ${positionText}`;
+            classInfo.appendChild(className);
+            
+            const attendanceDisplay = document.createElement('div');
+            attendanceDisplay.className = 'attendance';
+            attendanceDisplay.textContent = `${attendance.toFixed(1).replace('.', ',')}%`;
+            classInfo.appendChild(attendanceDisplay);
+            
+            // Adicionar variação em relação à semana anterior
+            const variation = document.createElement('div');
+            variation.className = 'variation';
+            
+            const diff = classData[1].currentWeek - classData[1].previousWeek;
+            const absDiff = Math.abs(diff).toFixed(1);
+            
+            if (diff > 0) {
+                variation.innerHTML = `<span class="up">↑ ${absDiff}%</span> em relação à semana anterior`;
+                variation.classList.add('up');
+            } else if (diff < 0) {
+                variation.innerHTML = `<span class="down">↓ ${absDiff}%</span> em relação à semana anterior`;
+                variation.classList.add('down');
+            } else {
+                variation.innerHTML = `<span class="equal">→ ${absDiff}%</span> em relação à semana anterior`;
+                variation.classList.add('equal');
+            }
+            
+            classInfo.appendChild(variation);
+            podiumStand.appendChild(classInfo);
+            podiumStep.appendChild(podiumStand);
+            
+            return podiumStep;
+        }
+
+        // Atualizar os slides com os dados mais recentes
+        function updateSlides() {
+            createSlides();
+            const slides = document.querySelectorAll('.slide');
+            if (slides.length > 0) {
+                slides[currentSlide % slides.length].classList.add('active');
+            }
+        }
+
+        // Atualizar dados a partir dos inputs
+        function updateDataFromInputs() {
+            const inputs = document.querySelectorAll('.class-control input');
+            
+            inputs.forEach(input => {
+                const grade = input.dataset.grade;
+                const className = input.dataset.class;
+                const weekType = input.dataset.week;
+                let value = parseFloat(input.value) || 0;
+                
+                // Validação
+                value = Math.max(0, Math.min(100, value));
+                
+                // Atualizar dados
+                classesData[grade][className][weekType === 'current' ? 'currentWeek' : 'previousWeek'] = value;
+            });
+        }
+
+        // Criar controles de administração com dois campos por turma
+        function createAdminControls() {
+            gradeControls.innerHTML = '';
+            
+            for (const grade in classesData) {
+                const gradeSection = document.createElement('div');
+                gradeSection.className = 'grade-section';
+                
+                const gradeTitle = document.createElement('h3');
+                gradeTitle.textContent = grade;
+                gradeSection.appendChild(gradeTitle);
+                
+                for (const className in classesData[grade]) {
+                    const classControl = document.createElement('div');
+                    classControl.className = 'class-control';
+                    
+                    const label = document.createElement('label');
+                    label.textContent = `Turma ${className}:`;
+                    classControl.appendChild(label);
+                    
+                    // Campo para semana atual
+                    const currentLabel = document.createElement('span');
+                    currentLabel.className = 'week-label';
+                    currentLabel.textContent = 'Atual:';
+                    classControl.appendChild(currentLabel);
+                    
+                    const currentInput = document.createElement('input');
+                    currentInput.type = 'number';
+                    currentInput.min = '0';
+                    currentInput.max = '100';
+                    currentInput.step = '0.1';
+                    currentInput.value = classesData[grade][className].currentWeek;
+                    currentInput.dataset.grade = grade;
+                    currentInput.dataset.class = className;
+                    currentInput.dataset.week = 'current';
+                    currentInput.addEventListener('change', validateInput);
+                    classControl.appendChild(currentInput);
+                    
+                    const currentPercent = document.createElement('span');
+                    currentPercent.textContent = '%';
+                    currentPercent.style.marginLeft = '5px';
+                    classControl.appendChild(currentPercent);
+                    
+                    // Campo para semana anterior
+                    const previousLabel = document.createElement('span');
+                    previousLabel.className = 'week-label';
+                    previousLabel.textContent = 'Anterior:';
+                    previousLabel.style.marginLeft = '1vw';
+                    classControl.appendChild(previousLabel);
+                    
+                    const previousInput = document.createElement('input');
+                    previousInput.type = 'number';
+                    previousInput.min = '0';
+                    previousInput.max = '100';
+                    previousInput.step = '0.1';
+                    previousInput.value = classesData[grade][className].previousWeek;
+                    previousInput.dataset.grade = grade;
+                    previousInput.dataset.class = className;
+                    previousInput.dataset.week = 'previous';
+                    previousInput.addEventListener('change', validateInput);
+                    classControl.appendChild(previousInput);
+                    
+                    const previousPercent = document.createElement('span');
+                    previousPercent.textContent = '%';
+                    previousPercent.style.marginLeft = '5px';
+                    classControl.appendChild(previousPercent);
+                    
+                    // Resultado da comparação
+                    const comparison = document.createElement('span');
+                    comparison.className = 'comparison-result';
+                    const diff = classesData[grade][className].currentWeek - classesData[grade][className].previousWeek;
+                    const absDiff = Math.abs(diff).toFixed(1);
+                    
+                    if (diff > 0) {
+                        comparison.innerHTML = `↑ +${absDiff}%`;
+                        comparison.style.color = '#4CAF50';
+                    } else if (diff < 0) {
+                        comparison.innerHTML = `↓ ${absDiff}%`;
+                        comparison.style.color = '#F44336';
+                    } else {
+                        comparison.innerHTML = `→ 0%`;
+                        comparison.style.color = '#2196F3';
+                    }
+                    
+                    classControl.appendChild(comparison);
+                    
+                    gradeSection.appendChild(classControl);
+                }
+                
+                gradeControls.appendChild(gradeSection);
+            }
+        }
+
+        // Validar input
+        function validateInput() {
+            let value = parseFloat(this.value);
+            if (isNaN(value)) value = 0;
+            this.value = Math.min(100, Math.max(0, value)).toFixed(1);
+            
+            // Atualizar resultado da comparação
+            const grade = this.dataset.grade;
+            const className = this.dataset.class;
+            const weekType = this.dataset.week;
+            
+            // Encontrar o controle correspondente
+            const control = this.parentElement;
+            const comparison = control.querySelector('.comparison-result');
+            
+            // Obter valores atual e anterior
+            let currentWeek, previousWeek;
+            
+            if (weekType === 'current') {
+                currentWeek = parseFloat(control.querySelector('input[data-week="current"]').value);
+                previousWeek = parseFloat(control.querySelector('input[data-week="previous"]').value);
+            } else {
+                previousWeek = parseFloat(this.value);
+                currentWeek = parseFloat(control.querySelector('input[data-week="current"]').value);
+            }
+            
+            // Calcular diferença
+            const diff = currentWeek - previousWeek;
+            const absDiff = Math.abs(diff).toFixed(1);
+            
+            // Atualizar exibição
+            if (diff > 0) {
+                comparison.innerHTML = `↑ +${absDiff}%`;
+                comparison.style.color = '#4CAF50';
+            } else if (diff < 0) {
+                comparison.innerHTML = `↓ ${absDiff}%`;
+                comparison.style.color = '#F44336';
+            } else {
+                comparison.innerHTML = `→ 0%`;
+                comparison.style.color = '#2196F3';
+            }
+        }
+
+        // Iniciar o slideshow
+        function startSlideShow() {
+            clearInterval(slideInterval);
+            const slides = document.querySelectorAll('.slide');
+            
+            if (slides.length === 0) return;
+            
+            slideInterval = setInterval(() => {
+                slides[currentSlide % slides.length].classList.remove('active');
+                currentSlide = (currentSlide + 1) % slides.length;
+                slides[currentSlide % slides.length].classList.add('active');
+            }, slideDuration);
+        }
+
+        // Função para processar arquivo Excel
+        function processExcelFile(file) {
+            // Mostrar mensagem de carregamento
+            excelStatus.textContent = 'Processando arquivo Excel...';
+            excelStatus.className = 'excel-status excel-loading';
+            excelStatus.style.display = 'block';
+            
+            const reader = new FileReader();
+            
+            reader.onload = function(e) {
+                try {
+                    const data = new Uint8Array(e.target.result);
+                    const workbook = XLSX.read(data, { type: 'array' });
+                    
+                    // Processar a primeira planilha
+                    const firstSheetName = workbook.SheetNames[0];
+                    const worksheet = workbook.Sheets[firstSheetName];
+                    
+                    // Converter para JSON
+                    const jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1 });
+                    
+                    // Processar os dados do Excel
+                    processExcelData(jsonData);
+                    
+                    // Atualizar a interface
+                    createAdminControls();
+                    updateSlides();
+                    
+                    // Salvar dados localmente
+                    localStorage.setItem('attendanceData', JSON.stringify(classesData));
+                    
+                    // Mostrar mensagem de sucesso
+                    excelStatus.textContent = 'Dados do Excel importados com sucesso!';
+                    excelStatus.className = 'excel-status excel-success';
+                    showStatus('Dados do Excel importados com sucesso!');
+                    
+                } catch (error) {
+                    console.error('Erro ao processar arquivo Excel:', error);
+                    excelStatus.textContent = 'Erro ao processar arquivo: ' + error.message;
+                    excelStatus.className = 'excel-status excel-error';
+                    showStatus('Erro ao processar arquivo Excel: ' + error.message, false);
+                }
+            };
+            
+            reader.onerror = function() {
+                excelStatus.textContent = 'Erro ao ler o arquivo.';
+                excelStatus.className = 'excel-status excel-error';
+                showStatus('Erro ao ler o arquivo.', false);
+            };
+            
+            reader.readAsArrayBuffer(file);
+        }
+
+        // Função para processar os dados do Excel
+        function processExcelData(data) {
+            // Estrutura esperada do Excel:
+            // [['Série', 'Turma', 'Frequência Atual', 'Frequência Anterior'], ...]
+            
+            // Pular cabeçalho (primeira linha) и processar as demais
+            for (let i = 1; i < data.length; i++) {
+                const row = data[i];
+                if (row && row.length >= 4) {
+                    const grade = row[0] ? row[0].toString().trim() : '';
+                    const className = row[1] ? row[1].toString().trim() : '';
+                    const currentWeek = parseFloat(row[2]) || 0;
+                    const previousWeek = parseFloat(row[3]) || 0;
+                    
+                    // Validar os dados
+                    if (grade && className && !isNaN(currentWeek) && !isNaN(previousWeek)) {
+                        // Verificar se a série existe, se não, criar
+                        if (!classesData[grade]) {
+                            classesData[grade] = {};
+                        }
+                        
+                        // Adicionar/atualizar os dados da turma
+                        classesData[grade][className] = {
+                            currentWeek: Math.max(0, Math.min(100, currentWeek)),
+                            previousWeek: Math.max(0, Math.min(100, previousWeek))
+                        };
+                    }
+                }
+            }
+        }
+
+        // Função para exportar dados para Excel
+        function exportToExcel() {
+            // Criar uma nova pasta de trabalho
+            const wb = XLSX.utils.book_new();
+            
+            // Preparar os dados para exportação
+            const excelData = [['Série', 'Turma', 'Frequência Atual', 'Frequência Anterior', 'Variação']];
+            
+            for (const grade in classesData) {
+                for (const className in classesData[grade]) {
+                    const current = classesData[grade][className].currentWeek;
+                    const previous = classesData[grade][className].previousWeek;
+                    const variation = current - previous;
+                    
+                    excelData.push([
+                        grade,
+                        className,
+                        current,
+                        previous,
+                        variation
+                    ]);
+                }
+            }
+            
+            // Criar uma planilha a partir dos dados
+            const ws = XLSX.utils.aoa_to_sheet(excelData);
+            
+            // Adicionar a planilha à pasta de trabalho
+            XLSX.utils.book_append_sheet(wb, ws, "Frequência Escolar");
+            
+            // Gerar o arquivo Excel e fazer o download
+            XLSX.writeFile(wb, "frequencia_escolar.xlsx");
+            
+            showStatus('Dados exportados para Excel com sucesso!');
+        }
+
+        // Alternar entre tela de exibição e painel de admin
+        togglePanelBtn.addEventListener('click', () => {
+            if (adminPanel.style.display === 'block') {
+                adminPanel.style.display = 'none';
+                displayScreen.style.display = 'flex';
+                togglePanelBtn.textContent = 'Admin';
+                startSlideShow();
+            } else {
+                adminPanel.style.display = 'block';
+                displayScreen.style.display = 'none';
+                togglePanelBtn.textContent = 'Fechar';
+                clearInterval(slideInterval);
+            }
+        });
+
+        // Tornar o botão mais visível quando o mouse se aproxima
+        document.addEventListener('mousemove', function(e) {
+            const toggleBtn = document.getElementById('togglePanel');
+            const rightEdge = window.innerWidth - 100;
+            const bottomEdge = window.innerHeight - 50;
+            
+            if (e.clientX > rightEdge || e.clientY > bottomEdge) {
+                toggleBtn.style.opacity = '0.8';
+            } else {
+                toggleBtn.style.opacity = '0.3';
+            }
+        });
+
+        // Salvar dados localmente
+        saveDataBtn.addEventListener('click', () => {
+            saveDataBtn.textContent = 'Salvando...';
+            saveDataBtn.disabled = true;
+            
+            updateDataFromInputs();
+            
+            // Salvar no localStorage
+            localStorage.setItem('attendanceData', JSON.stringify(classesData));
+            
+            // Atualizar slides
+            updateSlides();
+            
+            // Feedback visual
+            setTimeout(() => {
+                saveDataBtn.textContent = 'Dados Salvos!';
+                setTimeout(() => {
+                    saveDataBtn.textContent = 'Salvar Local';
+                    saveDataBtn.disabled = false;
+                }, 1000);
+            }, 500);
+        });
+
+        // Event listeners para os novos botões
+        saveCloudBtn.addEventListener('click', saveToCloud);
+        loadCloudBtn.addEventListener('click', loadFromCloud);
+        configCloudBtn.addEventListener('click', showConfigPanel);
+        saveConfigBtn.addEventListener('click', saveConfig);
+        cancelConfigBtn.addEventListener('click', hideConfigPanel);
+        configOverlay.addEventListener('click', hideConfigPanel);
+
+        // Alternar tema
+        themeToggle.addEventListener('click', toggleTheme);
+
+        // Event listener para o botão de importar Excel
+        importExcelBtn.addEventListener('click', () => {
+            excelFileInput.click();
+        });
+
+        // Event listener para quando um arquivo é selecionado
+        excelFileInput.addEventListener('change', (event) => {
+            const file = event.target.files[0];
+            if (file) {
+                processExcelFile(file);
+            }
+            // Limpar o input para permitir selecionar o mesmo arquivo novamente
+            event.target.value = '';
+        });
+
+        // Event listener para o botão de exportar Excel
+        exportExcelBtn.addEventListener('click', exportToExcel);
+
+        // Iniciar a aplicação quando a página carregar
+        window.addEventListener('DOMContentLoaded', init);
+    </script>
+</body>
+</html>
